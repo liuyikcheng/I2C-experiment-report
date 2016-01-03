@@ -1,0 +1,448 @@
+#include "DMA.h"
+#include "stm32f4xx.h"
+#include "gpio.h"
+#include "RCC.h"
+
+
+void connectDMAnI2C(Stream_t *stream, uint32_t mAddr, uint32_t pAddr, int numOfData){
+
+	stream->PAR =  pAddr;					//peripheral address
+	stream->M0AR = mAddr; 				//memory address
+	stream->NDTR = numOfData;     // Number of data items to transfer
+
+}
+
+void configDMAstream(Stream_t *stream, int channel, int direction){
+	DMAUnresetEnableClock();
+
+		 stream->CR &= ~(1 << EN);							//Stream Disable
+		uint32_t data =  stream->CR; 	 	 	 	 	  	 	 	 	 	 	 	 	 	// *read-only ->stream (enabled) */
+
+		stream->CR |= ( 1 << PINC ) | ( 1 << MINC ) | ( 1 << PL0 ) | ( 1 << PL1 ) ;//| ( 1 << TCIE );
+		uint32_t data2 =  stream->CR;
+
+		stream->CR &=  ~(3 << 25);
+		stream->CR |= (channel << 25);  					//select channel
+
+		stream->CR &= ~(3 << 6);
+		stream->CR |= (direction << 6 );      		//select dma transfer mode
+
+
+		stream->CR &= ~(3 << 13);
+		stream->CR |= (DMA_MemoryDataSize_byte << 13); //set the memory data size as byte
+
+		stream->CR &= ~(3 << 11);
+		stream->CR |= (DMA_PeripheralDataSize_byte << 11); //set the peripheral data size as byte
+
+		stream->CR &= ~(1 << MINC);
+		stream->CR |= (DMA_MemoryInc_Enable << MINC);      //enable the memory increment
+
+		stream->CR &= ~(1 << PINC);
+		stream->CR |= (DMA_PeripheralInc_Disable << PINC); //disable the peripheral increment
+
+		stream->CR &= ~(2 << 23);
+		stream->CR |= (DMA_MemoryBurst_Single << 23);    //set single memory burst
+
+
+		stream->CR &= ~(2 << 21);
+		stream->CR |= (DMA_PeripheralBurst_Single << 21); //set single peripheral burst
+		uint32_t data3 =  stream->CR;
+
+		stream->FCR = FIFO_DISABLE;               		 	//Disable FIFO
+
+		stream->CR &= ~(15 << 1);
+		stream->CR |= (15 << 1);							// enable all interrupt(TC, HT, TE) and EN bit
+		 uint32_t dataIn = stream->CR;
+	}
+
+
+void enableDMA(Stream_t *stream){
+	stream->CR |= 1;     						// Dma stream Enable
+
+}
+
+void checkEvent(DMA_reg *dma, int flag){
+	int bit = ((dma->HISR)>>flag)&1;
+	while(bit == 0 ){
+		bit = ((dma->HISR)>>flag)&1;
+		bit = dma->HIFCR;
+	}
+	dma->HIFCR |= (1<<flag);
+}
+
+#include "GPIO.h"
+
+void configurePin(int mode, int pinNumber, GPIO *port, int pupdr){
+	//GPIO_InitTypeDef gpio;
+	gpioUnresetEnableClock(port);
+
+/*	int *ptr = (int*)0x40023810;
+	ptr[0] = 0xFFFFFFBF;
+	int *enPtr = (int*)0x40023830;
+	enPtr[0] = 0x00100040; */
+
+	port->MODER &= ~(3 << (pinNumber * 2));
+	port->MODER |= mode << (pinNumber * 2);
+	port->OTYPER |= (1 << (pinNumber));			//open drain
+	port->OSPEED &= ~(3 << (pinNumber * 2));
+	port->OSPEED |= GPIO_HIGH_SPEED << (pinNumber * 2);
+	port->PUPDR &= ~(3 << (pinNumber * 2));
+	port->PUPDR |= pupdr << (pinNumber * 2);
+
+
+}
+
+void configurePinAFRL(GPIO *port, int pinNumber, int af){
+
+	port->AFRL &= ~(15 << (pinNumber * 4));
+	port->AFRL |=  af << (pinNumber * 4);
+}
+
+void configurePinAFRH(GPIO *port, int pinNumber, int af){
+
+	port->AFRH &= ~(15 << ((pinNumber-8) * 4));
+	port->AFRH |=  af << ((pinNumber-8) * 4);
+}
+
+void configureInputPin(int pinNumber, GPIO *port, int pupdr){
+	gpioUnresetEnableClock(port);
+
+	port->MODER &= ~(3 << (pinNumber * 2));
+	port->MODER |= GPIO_MODE_INTPUT << (pinNumber * 2);
+	port->OTYPER &= ~(1 << (pinNumber));
+	port->OSPEED &= ~(3 << (pinNumber * 2));
+	port->OSPEED |= GPIO_HIGH_SPEED << (pinNumber * 2);
+	port->PUPDR &= ~(3 << (pinNumber * 2));
+	port->PUPDR |= pupdr << (pinNumber * 2);
+
+}
+
+
+#include <stdint.h>
+
+#include "HostRcc.h"
+
+RCC_REG HostRcc;#include "I2C.h"
+
+void configureI2C(I2C_REG *i2c_reg){
+	int a;
+	i2c_reg->I2C_CR1 &= ~(1<<SWRST);  	//	unreset
+
+	i2c_reg->I2C_CR1 &= ~(1<<NOSTRETCH);	//	clock stretch enable
+
+	a = i2c_reg->I2C_CR1;
+
+	i2c_reg->I2C_CR2 &= ~(63);
+	i2c_reg->I2C_CR2 |= (0x2);		//	set clock freq to 4MHz
+//	i2c_reg->I2C_CR2 |= (1<<ITBUFEN);  	// ITBUFEN buffer interrupt enable
+	i2c_reg->I2C_CR2 |= (1<<ITEVTEN);  	// ITEVTEN event interrupt enable
+	i2c_reg->I2C_CR2 |= (1<<ITERREN);  	// ITERREN error interrupt enable
+
+
+	i2c_reg->I2C_CCR &= ~(1<<FS);	// standard mode
+	i2c_reg->I2C_CCR &= ~(4095<<CCR);
+	i2c_reg->I2C_CCR |= 0x100;		// Clock control register in Fm/Sm mode as
+
+	i2c_reg->I2C_CR1 |= (1<<ACK);	//	acknowledge enable
+	i2c_reg->I2C_CR1 |= (1<<PE);		//	peripheral enable
+
+}
+
+void configureI2C_DMAenable(I2C_REG *i2c_reg){
+	i2c_reg->I2C_CR2 |= (1<<DMAEN);
+}
+
+void configureI2cAddress(I2C_REG *i2c_reg, int ownAddress, int addr10Bit){
+
+	if(addr10Bit){
+		i2c_reg->I2C_OAR1 |= (1<<15);	// 10-bit address mode
+		i2c_reg->I2C_OAR1 &= ~(0x3FF);
+		i2c_reg->I2C_OAR1 = ownAddress;
+	}
+	else{
+		i2c_reg->I2C_OAR1 &= ~(1<<15);	//	7-bit address mode
+		i2c_reg->I2C_OAR1 &= ~(127<<1);
+		i2c_reg->I2C_OAR1 |= (ownAddress<<1); // set own address
+	}
+
+	int a = i2c_reg->I2C_OAR1;
+
+}
+
+// read data from status register 1
+int status1(I2C_REG *i2c_reg, int bit){
+	uint32_t stat = ((i2c_reg->I2C_SR1>>bit)&1);
+	uint32_t a = i2c_reg->I2C_SR1;
+	uint32_t b = i2c_reg->I2C_SR2;
+	uint32_t c = I2C_reg->I2C_SR1;
+	uint32_t d = I2C_reg->I2C_SR2;
+	return stat;
+}
+
+// read data from status register 2
+int status2(I2C_REG *i2c_reg, int bit){
+	uint32_t stat = ((i2c_reg->I2C_SR2>>bit)&1);
+	uint32_t a = i2c_reg->I2C_SR2;
+	return stat;
+}
+
+//To write data to the data register of I2C
+void i2cWriteData(int data, I2C_REG *i2c_reg){
+  
+	while(status1(i2c_reg, TxE) == 0);
+	i2c_reg->I2C_DR = data;
+}
+
+uint8_t i2cReadData(I2C_REG *i2c_reg){
+	while(status1(i2c_reg, RxNE) == 0);
+	return i2c_reg->I2C_DR;
+}
+
+//generate start condition
+void generateStart(I2C_REG *i2c_reg){
+
+	i2c_reg->I2C_CR1 |= (1<<8);
+	i2c_reg->I2C_CR2 |= (1<<11);
+	while(status1(i2c_reg, SB) == 0); //start bit was sent
+
+}
+
+void sendHeaderForReceive(I2C_REG *i2c_reg, int address){
+	int most2Bit = (address>>6);
+	int header = ((0xF0|(most2Bit<<2))|1);
+	i2c_reg->I2C_DR = header;
+	while(status1(i2c_reg, ADDR) == 0);
+}
+
+//select the address and decide write or read
+void sendAddress(I2C_REG *i2c_reg, int address, int addressMode, int rw){
+	int c, d;
+	if (addressMode == ADDRESS_10_BIT_MODE){
+		int most2Bit = (address>>6);
+		int header = (0xF0|(most2Bit<<2));
+		int slaveAddress = address&0xFF;
+
+		i2c_reg->I2C_DR = header;
+
+		while(status1(i2c_reg, ADD10) == 0);
+		i2c_reg->I2C_DR = slaveAddress;
+
+		while(status1(i2c_reg, ADDR) == 0);
+
+		if(rw == MASTER_RECEIVE){
+      
+      while(status1(I2C_reg,ADDR) == 0);
+      generateStart(i2c_reg);
+			sendHeaderForReceive(i2c_reg, I2C1_OWNADDRESS);
+      
+		}
+	}
+	else{
+		int slaveAddress = ((address<<1)|rw);
+		uint32_t a = i2c_reg->I2C_SR1;
+		uint32_t b = i2c_reg->I2C_SR2;
+		uint32_t c = I2C_reg->I2C_SR1;
+		uint32_t d = I2C_reg->I2C_SR2;
+    i2c_reg->I2C_DR = slaveAddress;
+
+	}
+}
+
+//disable acknowledge to indicate the master want to stop receive data
+void masterSendNack(I2C_REG *i2c_reg){
+	i2c_reg->I2C_CR1 &= ~(1<<10);
+}
+//To generate a stop bit
+void i2cStop(I2C_REG *i2c_reg){
+
+	i2c_reg->I2C_CR1 |= (1<<9);
+}
+
+void dmaRequestEnable(I2C_REG *i2c_reg){
+  i2c_reg->I2C_CR2 |= (1<<11);
+}
+
+#include "RCC.h"
+#include "GPIO.h"
+
+
+void gpioUnresetEnableClock(GPIO *port){
+	int shift = (((int)port) - 0x40020000) / 0x400;
+	RCC_reg->AHB1RSTR &= ~(1 << (shift));
+	RCC_reg->AHB1ENR |= (1 << (shift));
+}
+
+void unresetEnableI2cClock(){
+
+	RCC_reg->APB1RSTR &= ~(1<<21); //unreset enable I2C1
+	RCC_reg->APB1ENR |= (1<<21);
+
+	RCC_reg->APB1RSTR &= ~(1<<22); //unreset enable I2C2
+	RCC_reg->APB1ENR |= (1<<22);
+
+	RCC_reg->APB1RSTR &= ~(1<<23); //unreset enable I2C3
+	RCC_reg->APB1ENR |= (1<<23);
+	uint32_t data1 = RCC_reg->APB1ENR ;
+
+}
+
+void DMAUnresetEnableClock(){
+	//only DMA2 streams are able to perform memory-to-memory transfers
+
+	RCC_reg->AHB1RSTR  &= ~(1 << 21); 	//DMA1RST
+	uint32_t data = RCC_reg->AHB1RSTR ;
+	RCC_reg->AHB1ENR  |= (1 << 21);		//DMA1EN	Clock the DMA1 for configuration change
+	uint32_t data1 = RCC_reg->AHB1ENR ;
+}
+#include "RNG.h"
+
+
+
+void rngConfigure(){
+
+	RNG_reg->RNG_CR |= 4;
+}
+
+
+void rngInterruptConfigure(){
+
+	RNG_reg->RNG_CR |= 8;
+}
+
+
+#include "Register.h"
+#include "stm32f4xx.h"
+#include "stm32f4xx_hal.h"
+#include "I2C.h"
+#include "RCC.h"
+#include "GPIO.h"
+#include "DMA.h"
+#include <stdint.h>
+
+#define I2C1_OWNADDRESS		0x10
+
+uint8_t transmitBuffer[] = "HELLO";
+uint8_t receiveBuffer[100];
+
+void I2C1_EV_IRQHandler(void){
+
+	int readData, sr1, sr2;
+
+	if (((I2C_reg->I2C_SR1>>RxNE)&1) == 1)
+		readData = i2cReadData(I2C_reg);
+	else if (((I2C_reg->I2C_SR1>>ADDR)&1) == 1){
+		sr1 = I2C_reg->I2C_SR1;
+		sr2 = I2C_reg->I2C_SR2;
+	}
+	else if (((I2C_reg->I2C_SR1>>STOPF)&1) == 1){
+		sr1 = I2C_reg->I2C_SR1;
+
+	}
+	else if (((I2C_reg->I2C_SR1>>TxE)&1) == 1){
+		I2C_reg->I2C_DR = 0x50;
+	}
+
+
+}
+
+void DMA1_Stream4_IRQHandler(void){
+
+	int flag = dma1->HISR;
+	int data = I2C_reg->I2C_DR;
+	data = I2C3_reg->I2C_SR1;
+	data = I2C3_reg->I2C_SR2;
+			data = I2C_reg->I2C_SR1;
+			data = I2C_reg->I2C_SR2;
+	if ((((flag>>5)&1) == 1)&&(((flag>>4)&1) == 1)){
+		dma1->HIFCR |= (1<<5);
+		dma1->HIFCR |= (1<<4);
+		flag = dma1->HISR;
+		i2cStop(I2C3_reg);
+	}
+
+}
+
+void DMA1_Stream5_IRQHandler(void){
+
+	int flag = dma1->HISR;
+	int data = receiveBuffer[0];
+		data = I2C_reg->I2C_SR1;
+		data = I2C_reg->I2C_SR2;
+		data = I2C_reg->I2C_DR;
+
+	if ((((flag>>11)&1) == 1)&&(((flag>>10)&1) == 1)){
+		dma1->HIFCR |= (1<<11);
+		dma1->HIFCR |= (1<<10);
+		data = I2C_reg->I2C_DR;
+		i2cStop(I2C3_reg);
+	}
+
+}
+
+
+int main(void){
+
+	int a, b, c, d, e, f, data;
+
+  /* Enable the interrupt handle */
+//	HAL_NVIC_EnableIRQ(I2C1_EV_IRQn);
+//	HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+	HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
+//GPIO_NO_PULL_UP_DOWN GPIO_PULL_UP
+
+	/* Configure the GPIO pins as alternative function for I2C1  */
+  configurePin(GPIO_MODE_ALTFUNC, PIN_6, PORTB, GPIO_NO_PULL_UP_DOWN);//PB6 as SCL for I2C1
+  configurePin(GPIO_MODE_ALTFUNC, PIN_7, PORTB, GPIO_NO_PULL_UP_DOWN);//PB7 as SDA for I2C1
+
+  /* Configure the GPIO pins as alternative function for I2C3 */
+  configurePin(GPIO_MODE_ALTFUNC, PIN_8, PORTA, GPIO_NO_PULL_UP_DOWN); //PA8 as SCL for I2C3
+  configurePin(GPIO_MODE_ALTFUNC, PIN_9, PORTC, GPIO_NO_PULL_UP_DOWN); //PC9 as SDA for I2C3
+
+  /* Connect GPIO pins with the SCL and SDA pin from I2C*/
+  configurePinAFRL(PORTB, PIN_6, AF4);
+  configurePinAFRL(PORTB, PIN_7, AF4);
+  configurePinAFRH(PORTA, PIN_8, AF4);
+  configurePinAFRH(PORTC, PIN_9, AF4);
+
+  /* Unreset and enable I2C clock */
+  unresetEnableI2cClock();
+  /* Set the own address of I2C1  */
+  configureI2cAddress(I2C_reg, I2C1_OWNADDRESS, ADDRESS_7_BIT_MODE);
+
+  /* configure DMA with according stream */
+	configDMAstream(&(dma1->S4), channel3, M2P);
+	configDMAstream(&(dma1->S5), channel1, P2M);
+
+  /* set the Peripheral address and the memory address to the DMA */
+	connectDMAnI2C(&(dma1->S4), transmitBuffer, &(I2C3_reg->I2C_DR), 5);
+	connectDMAnI2C(&(dma1->S5), receiveBuffer, &(I2C_reg->I2C_DR), 5);
+
+  /* enable DMA request in I2C */
+  dmaRequestEnable(I2C3_reg);
+  dmaRequestEnable(I2C_reg);
+
+  /* enable DMA */
+	enableDMA(&(dma1->S4));
+	enableDMA(&(dma1->S5));
+
+  /* Configure the the I2C interface and enable the peripheral */
+	configureI2C(I2C_reg);
+	configureI2C(I2C3_reg);
+
+
+
+
+			generateStart(I2C3_reg);
+			sendAddress(I2C3_reg, I2C1_OWNADDRESS, ADDRESS_7_BIT_MODE, MASTER_TRANSMIT);
+	
+			while(1){
+
+				e = I2C3_reg->I2C_SR1;
+				e = I2C3_reg->I2C_SR2;
+				f = I2C_reg->I2C_SR1;
+				f = I2C_reg->I2C_SR2;
+
+			}
+
+
+}
